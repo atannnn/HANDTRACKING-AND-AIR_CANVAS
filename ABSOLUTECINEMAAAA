@@ -1,0 +1,236 @@
+import cv2
+import numpy as np
+import time
+import os
+import HandTrackingModule as htm
+from pygame import mixer 
+
+####################
+# --- 1. SETTINGS ---
+brushThickness = 15
+markerThickness = 35
+eraserThickness = 70
+
+# Define Colors (BGR)
+colorBlue = (230, 196, 97)
+colorGray = (50, 50, 50)
+colorRed = (73, 51, 219)
+colorPurple = (235, 23, 94)
+
+# --- 2. STATE MANAGEMENT ---
+colorIndex = 0  
+activeColor = colorBlue 
+toolType = "brush" 
+drawColor = activeColor 
+
+# --- 3. CINEMA MODE SETTINGS ---
+mixer.init()
+
+# Try loading sound/video from Header folder
+try:
+    mixer.music.load("Header/cinema.mp3") 
+except:
+    print("Warning: Header/cinema.mp3 not found. Sound won't play.")
+
+cinemaVideo = cv2.VideoCapture("Header/cinema.mp4")
+####################
+
+# --- 4. LOAD IMAGES ---
+folderPath = "Header"
+try:
+    myList = os.listdir(folderPath)
+    myList.sort() 
+except FileNotFoundError:
+    print(f"Error: Folder '{folderPath}' not found.")
+    exit()
+
+overlayList = []
+
+print("Loading Header Images...")
+for imPath in myList:
+    # Skip cinema files if they are in the folder
+    if "cinema" in imPath: 
+        continue
+        
+    image = cv2.imread(f'{folderPath}/{imPath}')
+    if image is None: continue
+    
+    # Force resize to 1280x125
+    image = cv2.resize(image, (1280, 125)) 
+    overlayList.append(image)
+
+if len(overlayList) == 0:
+    print("Error: No images found in Header folder.")
+    exit()
+
+header = overlayList[0] 
+
+# --- 5. SETUP CAM & DETECTOR ---
+cap = cv2.VideoCapture(0)
+cap.set(3, 1280)
+cap.set(4, 720)
+
+detector = htm.handDetector(detectionCon=0.85, maxHands=2)
+xp, yp = 0, 0
+imgCanvas = np.zeros((720, 1280, 3), np.uint8)
+
+# --- HELPER FUNCTION: UPDATE HEADER ---
+def updateHeader(tType, cIndex):
+    try:
+        if tType == "eraser": return overlayList[8]
+        elif tType == "brush": return overlayList[cIndex]
+        elif tType == "marker": return overlayList[cIndex + 4]
+    except IndexError: return overlayList[0]
+    return overlayList[0]
+
+# --- HELPER FUNCTION: PLAY VIDEO FULLY ---
+def play_cinema_mode():
+    """Plays the video and music until the end, then returns."""
+    print("ABSOLUTE CINEMAAAAAAAAAAAAAAAAAAAAAAAA")
+    
+    cinemaVideo.set(cv2.CAP_PROP_POS_FRAMES, 0)
+    try: mixer.music.play()
+    except: pass
+
+    while True:
+        ret, frame = cinemaVideo.read()
+        if not ret: break
+            
+        frame = cv2.resize(frame, (1280, 720))
+        cv2.imshow("Image", frame)
+        
+        if cv2.waitKey(25) & 0xFF == ord('q'):
+            break
+            
+    mixer.music.stop()
+    print("")
+
+
+# --- MAIN LOOP ---
+while True:
+    # 1. Import image
+    success, img = cap.read()
+    if not success: break
+    img = cv2.flip(img, 1)
+
+    # Resize checks
+    h, w, c = img.shape
+    if header.shape[1] != w: header = cv2.resize(header, (w, 125))
+    if imgCanvas.shape[1] != w: imgCanvas = cv2.resize(imgCanvas, (w, h))
+
+    # 2. Find Hands
+    img = detector.findHands(img)
+    
+    # --- CHECK FOR CINEMA TRIGGER ---
+    handCount = 0
+    allHandsStatus = [] 
+    
+    # *** ROBUST FIX FOR ATTRIBUTE ERROR ***
+    # This block checks if your module uses 'results' OR 'result'
+    multi_hand_landmarks = None
+    
+    if hasattr(detector, 'results') and detector.results:
+         multi_hand_landmarks = detector.results.multi_hand_landmarks
+    elif hasattr(detector, 'result') and detector.result:
+         multi_hand_landmarks = detector.result.multi_hand_landmarks
+
+    if multi_hand_landmarks:
+        handCount = len(multi_hand_landmarks)
+        
+        # Loop to check if hands are "Open" (5 fingers up)
+        for i in range(handCount):
+            lmListCheck = detector.findPosition(img, handNo=i, draw=False)
+            if len(lmListCheck) != 0:
+                fingersCheck = detector.fingersUp()
+                # If 5 fingers are up (Open Hand)
+                if sum(fingersCheck) == 5:
+                    allHandsStatus.append(True)
+                else:
+                    allHandsStatus.append(False)
+
+    # *** TRIGGER LOGIC ***
+    # If 2 hands are up and both are open (True)
+    if handCount == 2 and len(allHandsStatus) >= 2 and all(allHandsStatus):
+        play_cinema_mode()
+        continue 
+
+    # ---------------------------------------------------------
+    # STANDARD DRAWING LOGIC
+    # ---------------------------------------------------------
+    lmList = detector.findPosition(img, handNo=0, draw=False)
+
+    if len(lmList) != 0:
+        x1, y1 = lmList[8][1:]
+        x2, y2 = lmList[12][1:]
+        fingers = detector.fingersUp()
+
+        # SELECTION MODE
+        if fingers[1] and fingers[2]:
+            xp, yp = 0, 0 
+            
+            if y1 < 125:
+                # Color Selection
+                if 0 < x1 < 200:
+                    colorIndex = 0
+                    activeColor = colorBlue
+                elif 200 < x1 < 320:
+                    colorIndex = 1
+                    activeColor = colorGray
+                elif 320 < x1 < 440:
+                    colorIndex = 2
+                    activeColor = colorRed
+                elif 440 < x1 < 560:
+                    colorIndex = 3
+                    activeColor = colorPurple
+
+                if 0 < x1 < 560 and toolType == "eraser":
+                    toolType = "brush" 
+
+                # Tool Selection
+                elif 650 < x1 < 800: toolType = "brush"
+                elif 800 < x1 < 950: toolType = "marker"
+                elif 1050 < x1 < 1280: toolType = "eraser"
+
+                header = updateHeader(toolType, colorIndex)
+                if header.shape[1] != w: header = cv2.resize(header, (w, 125))
+                
+                if toolType == "eraser": drawColor = (0, 0, 0)
+                else: drawColor = activeColor
+
+            cv2.rectangle(img, (x1, y1 - 25), (x2, y2 + 25), drawColor, cv2.FILLED)
+
+        # DRAWING MODE
+        if fingers[1] and fingers[2] == False:
+            cv2.circle(img, (x1, y1), 15, drawColor, cv2.FILLED)
+            
+            if xp == 0 and yp == 0: xp, yp = x1, y1
+
+            if toolType == "brush": thick = brushThickness
+            elif toolType == "marker": thick = markerThickness
+            elif toolType == "eraser": thick = eraserThickness
+            else: thick = brushThickness
+
+            cv2.line(img, (xp, yp), (x1, y1), drawColor, thick)
+            cv2.line(imgCanvas, (xp, yp), (x1, y1), drawColor, thick)
+            xp, yp = x1, y1
+
+    # Merge Image
+    imgGray = cv2.cvtColor(imgCanvas, cv2.COLOR_BGR2GRAY)
+    _, imgInv = cv2.threshold(imgGray, 50, 255, cv2.THRESH_BINARY_INV)
+    imgInv = cv2.cvtColor(imgInv, cv2.COLOR_GRAY2BGR)
+    
+    if img.shape != imgInv.shape:
+        imgInv = cv2.resize(imgInv, (img.shape[1], img.shape[0]))
+        
+    img = cv2.bitwise_and(img, imgInv)
+    img = cv2.bitwise_or(img, imgCanvas)
+
+    headerHeight, headerWidth, _ = header.shape
+    img[0:headerHeight, 0:headerWidth] = header
+    
+    cv2.imshow("Image", img)
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
