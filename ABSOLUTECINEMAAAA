@@ -37,6 +37,7 @@ cinemaVideo = cv2.VideoCapture("Header/cinema.mp4")
 
 # --- 4. LOAD IMAGES ---
 folderPath = "Header"
+galleryPath = "Gallery"
 try:
     myList = os.listdir(folderPath)
     myList.sort() 
@@ -106,7 +107,9 @@ def play_cinema_mode():
     print("")
 
 
-# --- MAIN LOOP ---
+lastSaveTime = 0
+saveCooldown = 10  
+
 while True:
     # 1. Import image
     success, img = cap.read()
@@ -198,6 +201,46 @@ while True:
                 else: drawColor = activeColor
 
             cv2.rectangle(img, (x1, y1 - 25), (x2, y2 + 25), drawColor, cv2.FILLED)
+
+        # ---------------------------------------------------------
+        # SAVE MODE - 3 Fingers Up (Index, Middle, Ring)
+        # ---------------------------------------------------------
+        if fingers[1] and fingers[2] and fingers[3] and fingers[4] == False:
+            
+            # Check if 10 seconds have passed since the last save
+            if time.time() - lastSaveTime > saveCooldown:
+                
+                # 1. GENERATE FILENAME
+                filename = f"Gallery/Art_{int(time.time())}.jpg"
+                
+                # 2. MERGE LOGIC (Camera + Drawing)
+                imgGray = cv2.cvtColor(imgCanvas, cv2.COLOR_BGR2GRAY)
+                _, imgInv = cv2.threshold(imgGray, 50, 255, cv2.THRESH_BINARY_INV)
+                imgInv = cv2.cvtColor(imgInv, cv2.COLOR_GRAY2BGR)
+                
+                imgSave = cv2.bitwise_and(img, imgInv)
+                imgSave = cv2.bitwise_or(imgSave, imgCanvas)
+                
+                # Add header to the saved image for completeness
+                if header.shape[1] == w:
+                    imgSave[0:125, 0:w] = header
+                
+                # 3. SAVE
+                cv2.imwrite(filename, imgSave)
+                print(f"Saved: {filename}")
+                
+                # 4. SHOW "SAVED" MESSAGE
+                cv2.putText(img, "SAVED!", (x1, y1 - 25), cv2.FONT_HERSHEY_SIMPLEX, 
+                            2, (0, 255, 0), 3)
+                
+                # 5. UPDATE CLOCK
+                lastSaveTime = time.time()
+                
+            else:
+                # OPTIONAL: Show a countdown if you try to save too soon
+                secondsLeft = int(saveCooldown - (time.time() - lastSaveTime))
+                cv2.putText(img, f"Wait {secondsLeft}s", (x1, y1 - 25), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 3)    
 
         # DRAWING MODE
         if fingers[1] and fingers[2] == False:
